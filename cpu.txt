@@ -1,0 +1,343 @@
+#!/bin/sh
+ 
+# 首先载入配置文件，如果配置文件不存在，则报错退出
+SOURCE=$HOME/config/config
+check_source()
+{
+if [ -r $SOURCE ]; then
+. $SOURCE
+else
+echo "$(basename $0): Cannot locate the default setting file."
+exit 1
+fi
+}
+ 
+# 定义报表头
+report_header()
+{
+HOSTIP=$(ifconfig -a | sed -n '2p' |awk '{print $2}')
+HOSTNAME=$(hostname)
+USER=`who am i | cut -d " " -f1`
+cat<Hostname: $HOSTNAME Server: $HOSTIP
+User: $USER Time: $(date +%Y'-'%m'-'%d' '%H':'%M':'%S)
+ 
+SYSTEM CHECK REPORT
+===================
+ 
+!
+}
+ 
+# 定义日志文件存放的目录和日志文件名，将当前用户目录设置为LOG_PATH
+LOG_PATH=$(echo $HOME)
+LOG_FILE=$LOG_PATH/log`date +%Y%m%d%H%M%S`
+ 
+# 备份历史文件
+cd $LOG_PATH
+test -f log2007*
+if [ "$?" -eq 0 ];then
+mv $LOG_PATH/log2007* $LOG_PATH/niyl/ >/dev/null 2>&1
+else
+:
+fi
+ 
+#define temp directory ,if not exist,create temp directory first.
+TEMP_PATH=$LOG_PATH/temp
+if [ -d $TEMP_PATH ];then
+:
+else
+mkdir $TEMP_PATH
+fi
+ 
+# 载入环境设置
+check_source
+ 
+# 输出报表头信息
+report_header >>$LOG_FILE
+ 
+ 
+# 检查 CPU的使用情况
+echo "***************************************** Check CPU *****************************************">>$LOG_FILE
+vmstat 1 10 | awk '{print $0;if($1 ~ /^[0-9].*/) (totalcpu+=$16);(avecpu=100-totalcpu/10)}; END {print "The average usage of cpu is :"avecpu}' >$TEMP_PATH/cpu_info
+ 
+cat $TEMP_PATH/cpu_info >>$LOG_FILE
+ 
+cpu_used_pct=`cat $TEMP_PATH/cpu_info | grep "The average usage of cpu is" |awk -F ":" '{print $2}' `
+if [ "$cpu_used_pct" -gt "$CPU_VALUE" ] ; then
+echo "LOG-Warnning:`date +%Y'-'%m'-'%d' '%H':'%M':'%S`, The CPU usage is up to $cpu_used_pct%. Please check the system.">>$LOG_FILE
+else
+echo " The CPU load is OK!!">>$LOG_FILE
+fi
+ 
+ 
+# 内存使用监控，包括交换区的使用情况监控 
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check memory useage *****************************************">>$LOG_FILE
+cat $TEMP_PATH/cpu_info | awk '{print $0;if($1 ~ /^[0-9].*/) (totalpi+=$6)(totalpo+=$7)};
+END {if(totalpi<10 && totalpo<10) print " The memory usage  is OK!!"; if(totalpi>10 || totalpo>10) print "The memory pagein  and pageout is to high,Please check the usage of the memory!"} '>>$LOG_FILE
+ 
+ 
+# 检查磁盘空间. 
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check disk space *****************************************">>$LOG_FILE
+df -k >>$LOG_FILE
+df -k |grep -v proc |grep -v Filesystem |awk '{x=1*$4}{print $1","$2","$3","$4","$5","$6","$7}'>$TEMP_PATH/disk_info
+ 
+cat $TEMP_PATH/disk_info | grep -v '^#' | while read line
+do
+item1=$(echo $line | awk -F ',' '{print $1}')
+item2=$(echo $line | awk -F ',' '{print $2}')
+item3=$(echo $line | awk -F ',' '{print $3}')
+item4=$(echo $line | awk -F ',' '{print $4}' |awk -F '%' '{print $1}')
+item5=$(echo $line | awk -F ',' '{print $5}')
+item6=$(echo $line | awk -F ',' '{print $6}')
+item7=$(echo $line | awk -F ',' '{print $7}')
+if [ "$item4" -gt "$DISK_VALUE" ]; then
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`, $item7 is not have enough space ,please check." >>$LOG_FILE
+else
+echo " The space of disk $item7 is OK!!" >>$LOG_FILE
+fi
+done
+ 
+#
+# 检查磁盘的io进行监控，iostat
+# 
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check iostat *****************************************">>$LOG_FILE
+iostat 1 3 >>$LOG_FILE
+ 
+# 对网络流量进行监控
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check netstat *****************************************">>$LOG_FILE
+netstat -i >>$LOG_FILE
+ 
+# Check the oracle background processes . 
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check oracle process *****************************************">>$LOG_FILE
+ps -ef | grep ora_ | grep -v grep | awk -F '-' '{print $2}' | awk '{print $2}' >/$TEMP_PATH/ora_process_info
+ps -ef | grep ora_ | grep -v grep >>$LOG_FILE
+ 
+# background process ckpt 
+if [ `grep ora_ckpt_ora92 $TEMP_PATH/ora_process_info` ]; then
+COUNT=1
+else
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The Process ora_ckpt_ora92 was terminated!" >>$LOG_FILE 
+fi
+ 
+# background process dbwr 
+if [ `grep ora_dbw0_ora92 $TEMP_PATH/ora_process_info` ]; then
+COUNT=$((COUNT+1))
+else
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The Process ora_dbw0_ora92 was terminated !" >>$LOG_FILE 
+fi
+ 
+# background process reco 
+if [ `grep ora_reco_ora92 $TEMP_PATH/ora_process_info` ]; then
+COUNT=$((COUNT+1))
+else
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The Process ora_reco_ora92 was terminated !" >>$LOG_FILE 
+fi
+ 
+# background process lgwr
+if [ `grep ora_lgwr_ora92 $TEMP_PATH/ora_process_info` ]; then
+COUNT=$((COUNT+1))
+else
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The Process ora_lgwr_ora92 was terminated !" >>$LOG_FILE 
+fi
+ 
+# background process pmon
+if [ `grep ora_pmon_ora92 $TEMP_PATH/ora_process_info` ]; then
+COUNT=$((COUNT+1))
+else
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The Process ora_pmon_ora92 was terminated !" >>$LOG_FILE 
+fi
+ 
+# background process smon 
+if [ `grep ora_smon_ora92 $TEMP_PATH/ora_process_info` ]; then
+COUNT=$((COUNT+1))
+else
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The Process ora_smon_ora92 was terminated !" >>$LOG_FILE 
+fi
+ 
+if [ "$COUNT" -eq 6 ];then
+echo >>$LOG_FILE 
+echo " The main six Oracle processes is OK !!" >>$LOG_FILE 
+else
+:
+fi
+ 
+ 
+# 
+# Check the oracle tablespace.
+# 
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check oracle tablespace *****************************************">>$LOG_FILE
+#su - oracle -c sqlplus dxh/dxh < /home/guest/dxhwh/niyl/tablespace_query.sql >>$LOG_FILE
+sqlplus -s dxh/dxh < $TEMP_PATH/ts_info
+set pagesize 100
+set linesize 100
+col status for a10
+col tablespace_name for a20
+col contents for a10
+col "size(M)" for a15
+col used for a15
+col pct for a10
+select d.status, d.tablespace_name, 
+TO_CHAR(NVL(a.bytes / 1024 /1024, 0),'99G999G990') "size(M)",
+TO_CHAR(NVL(a.bytes - NVL(f.bytes, 0),0)/1024/1024, '99G999G990D00') used,
+TO_CHAR(NVL((a.bytes - NVL(f.bytes, 0)) / a.bytes * 100, 0), '990D00')||'%' pct
+FROM sys.dba_tablespaces d,
+(select tablespace_name, sum(bytes) bytes from dba_data_files group by tablespace_name) a,
+(select tablespace_name, sum(bytes) bytes from dba_free_space group by tablespace_name) f
+WHERE d.tablespace_name = a.tablespace_name(+) 
+AND d.tablespace_name = f.tablespace_name(+)
+order by tablespace_name ;
+exit
+!EOF
+ 
+cat $TEMP_PATH/ts_info>>$LOG_FILE
+cat $TEMP_PATH/ts_info |grep ONLINE |awk '{print $2":"$3":"$4":"$5}' |while read line
+do
+ts_name=$(echo $line |awk -F ':' '{print $1}')
+ts_total=$(echo $line |awk -F ':' '{print $2}')
+ts_used=$(echo $line |awk -F ':' '{print $3}')
+ts_used_pct=$(echo $line |awk -F ':' '{print $4}' |awk -F '%' '{print $1}'|awk -F '.' '{print $1}')
+if [ "$ts_used_pct" -gt "$TS_VALUE" -o "$ts_used_pct" -eq "$TS_VALUE" ]; then
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,表空间$ts_name 的剩余空间紧张,请尽快清理表空间!" >>$LOG_FILE 
+else
+echo " The tablespace of $ts_name is OK!!" >>$LOG_FILE 
+fi
+done
+ 
+# 
+# Check the oracle Job.
+# 
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check oracle job *****************************************">>$LOG_FILE
+sqlplus -s dxh/dxh <> $LOG_FILE
+col job for 999
+col last_date for a20
+col next_date for a20
+col what for a40
+set linesize 120
+ 
+select job,what,
+to_char(last_date,'yyyy-mm-dd hh24:mi:ss') last_date,
+to_char(next_date,'yyyy-mm-dd hh24:mi:ss') next_date,
+failures
+from dba_jobs 
+order by job;
+!!ET
+ 
+sqlplus -s dxh/dxh < $TEMP_PATH/job_info
+col flag for a5
+col rou for 99999
+select 'XXX' flag,job,failures,broken,round(next_date-sysdate,2)*100 rou from dba_jobs order by job;
+!EOF
+ 
+cat $TEMP_PATH/job_info |grep XXX |awk '{print $2,$3,$4,$5}' |while read line
+do
+jobnum=`echo $line | awk '{print $1}'`
+failure=`echo $line | awk '{print $2}'`
+broken=`echo $line | awk '{print $3}'`
+round=`echo $line | awk '{print $4}'`
+if [ "$jobnum" -eq 3 -o "$jobnum" -eq 4 ] ; then
+ 
+if [ "$failure" -eq 0 -a "$broken"="N" -a "$round" -le 100 ]; then
+echo " The Job $jobnum is OK!!" >>$LOG_FILE
+else
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The Job $jobnum was terminated !" >>$LOG_FILE
+fi
+else
+if [ "$failure" -eq 0 -a "$broken"="N" -a "$round" -eq 0 ]; then
+echo " The Job $jobnum is OK!!" >>$LOG_FILE
+else
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The Job $jobnum was terminated !" >>$LOG_FILE
+fi
+fi
+done
+ 
+# 
+# Check the oracle session.
+# 
+sqlplus -s dxh/dxh <> $LOG_FILE
+select 'The Total sessions number is '||count(*)||'.' from v$session ; 
+select 'table mt: ' ,count(*) from t_dxh_mt where msgresult='SUCCESS';
+select 'table detect:' ,count(*) from t_dxh_opendetect where msgresult='SUCCESS';
+exit
+!
+ 
+ 
+# 
+# Check oracle table for user information sync.
+# 
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "*****************************************oracle 同步数据检查信息输出*****************************************">>$LOG_FILE
+sqlplus -s ccmdxh/ccm@ccmdxh < $TEMP_PATH/jiya_info
+select 'NUM_P630' flag,count(*) from T_DXH_USERINFO ; 
+select 'NUM_p570' flag,count(*) from T_DXH_USERINFO2 ;
+!
+cat $TEMP_PATH/jiya_info >>$LOG_FILE
+cat $TEMP_PATH/jiya_info |grep NUM_| grep -v COUNT | while read line 
+do
+zhuji=`echo $line |awk '{print $1}'`
+user_num=`echo $line |awk '{print $2}'`
+if [ "$user_num" -le 2000 ]; then
+echo " The node $zhuji users sync is OK!! " >>$LOG_FILE 
+else
+echo "LOG-Warnning: The node $zhuji users sync terminated abnormally.Please check !!" >>$LOG_FILE 
+fi
+done
+ 
+#
+# Check oracle alert log.
+#
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check oracle alert log *****************************************">>$LOG_FILE
+tail -300 $ORACLE_BASE/admin/ora92/bdump/alert_ora92.log | grep -v Thread | 
+grep -v Current | grep -v "`date +'%a %h'`" | grep -v ":[0-9][0-9]:" >>$LOG_FILE
+ 
+#
+# Check system error report. 
+#
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check system err *****************************************">>$LOG_FILE
+errpt | head -10 >>$LOG_FILE
+day=`date +%D |awk -F "/" '{print $1$2}'`
+errpt | awk '{print $2}' | grep ^$day
+if [ $? -eq 0 ] ; then
+echo "LOG-Warnning: `date +%Y'-'%m'-'%d' '%H':'%M':'%S`,The system has found a error today.Please check the error report." >>$LOG_FILE
+else
+echo >>$LOG_FILE
+echo " There is no system error report today.System is OK!!" >>$LOG_FILE
+fi
+ 
+#
+# Check HACMP. 
+#
+echo >>$LOG_FILE
+echo >>$LOG_FILE
+echo "***************************************** check HACMP status *****************************************">>$LOG_FILE
+/usr/es/sbin/cluster/clstat -o > $TEMP_PATH/ha_info
+lssrc -g cluster >> $TEMP_PATH/ha_info
+cat $TEMP_PATH/ha_info >>$LOG_FILE 
+echo >>$LOG_FILE
+cat $TEMP_PATH/ha_info| grep "Node:" |awk -F ':' '{print $2,$3}' | awk '{print $1,$3}' | while read line 
+do
+node=$(echo $line | awk '{print $1}')"'s"
+echo $line |grep UP$ >/dev/null
+if [ "$?" -eq 0 ]; then
+echo " The node $node is OK!!" >>$LOG_FILE 
+else
+echo "`date +%Y'-'%m'-'%d' '%H':'%M':'%S`,LOG-Warnning: The node $node status is DOWN ,it was terminated ." >>$LOG_FILE 
+fi
+done
